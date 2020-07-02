@@ -1,0 +1,164 @@
+const express = require("express");
+const User = require("../models/user");
+const auth = require("../middleware/auth");
+const router = express.Router();
+const multer = require("multer");
+const sharp = require("sharp");
+
+//multer setup
+const avatar = multer({
+  limits: {
+    fileSize: 1000000,
+  },
+  fileFilter(req, file, cb) {
+    if (!file.originalname.match(/\.(jpg|jpeg|png)$/)) {
+      return cb(new Error("Please upload a jpg,jpeg, or a png"));
+    }
+    cb(undefined, true);
+  },
+});
+
+//Error
+const error404 = { errorCode: 404, message: "User not found" };
+const error400 = { errorCode: 400, message: "Invalid Update!" };
+
+router.get("/users/me", auth, async (req, res) => {
+  res.send(req.user);
+});
+
+router.post(
+  "/users/me/avatar",
+  auth,
+  avatar.single("avatar"),
+  async (req, res) => {
+    let buffer = await sharp(req.file.buffer)
+      .resize({ width: 250, height: 250 })
+      .png()
+      .toBuffer();
+    req.user.avatar = buffer;
+    await req.user.save();
+    res.send();
+  },
+  (error, req, res, next) => {
+    res.status(400).send({ error: error.message });
+  }
+);
+
+router.post("/users/login", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const user = await User.findByCredentials(email, password);
+    const token = await user.generateAuthToken();
+    res.send({ user, token });
+  } catch (e) {
+    res.status(400).send(e);
+  }
+});
+
+router.post("/users/logout", auth, async (req, res) => {
+  try {
+    req.user.tokens = req.user.tokens.filter(
+      (token) => token.token !== req.token
+    );
+    await req.user.save();
+    res.status(200).send({ message: "Logged Out successfully" });
+  } catch (e) {
+    res.status(500).send(e);
+  }
+});
+
+router.post("/users/logoutAll", auth, async (req, res) => {
+  try {
+    req.user.tokens = [];
+    await req.user.save();
+    res.send({ message: "All Sessions Ended" });
+  } catch (e) {
+    res.status(400).send(e);
+  }
+});
+
+router.get("/users/:id", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).send(error404);
+    }
+    res.send(user);
+  } catch (e) {
+    res.status(500).send(e);
+  }
+});
+
+router.get("/users/:id/avatar", async (req, res) => {
+  try {
+    let user = await User.findById(req.params.id);
+
+    if (!user || !user.avatar) {
+      throw new Error();
+    }
+
+    res.set("Content-Type", "image/png");
+    res.send(user.avatar);
+  } catch (e) {
+    res.status(404).send(e);
+  }
+});
+
+router.post("/users", async (req, res) => {
+  const user = new User(req.body);
+  try {
+    await user.save();
+    const token = await user.generateAuthToken();
+
+    res.status(201).send({ user, token });
+  } catch (e) {
+    res.status(400).send(e);
+  }
+});
+
+router.patch("/users/me", auth, async (req, res) => {
+  const updates = Object.keys(req.body);
+  const validUpdates = ["name", "email", "age", "password"];
+  const isValid = updates.every((update) => validUpdates.includes(update));
+
+  if (!isValid) {
+    console.log(error400);
+    return res.status(400).send(error400);
+  }
+
+  try {
+    updates.forEach((update) => (req.user[update] = req.body[update]));
+    await req.user.save();
+
+    res.send(req.user);
+  } catch (e) {
+    console.log(e);
+    res.status(500).send(e);
+  }
+});
+
+router.delete("/users/me", auth, async (req, res) => {
+  try {
+    await req.user.remove();
+    res.send(req.user);
+  } catch (e) {
+    res.status(500).send(e);
+  }
+});
+
+router.delete("/users/me/avatar", auth, async (req, res) => {
+  try {
+    if (!req.user.avatar) {
+      throw new Error("User Does not have a profile picture!");
+    }
+    req.user.avatar = undefined;
+    await req.user.save();
+    res.send({ message: "Image Removed!" });
+  } catch (e) {
+    res.status(400).send(e);
+  }
+});
+
+module.exports = router;
